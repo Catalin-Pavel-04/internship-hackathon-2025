@@ -1,83 +1,66 @@
-import streamlit as st
+from nicegui import ui
 import requests
 import json
 
-st.set_page_config(page_title="AI Code Review Assistant", page_icon="🤖", layout="wide")
+BACKEND_URL = "http://localhost:8000/review"
 
-st.title("AI-Powered Code Review Assistant")
-st.write("Analyze your code, detect issues, and get AI-driven recommendations instantly.")
+ui.page_title('AI Code Review Assistant 🤖')
 
-# Sidebar
-st.sidebar.header("Settings")
-llm_mode = st.sidebar.radio("Mode", ["Demo", "Local LLM", "Remote API"])
-api_url = st.sidebar.text_input("Backend URL", "http://localhost:8000/review")
+ui.markdown("## 🧠 AI Code Review Assistant")
+ui.markdown("Paste your code below and get AI-driven feedback and auto-fix suggestions.")
 
-st.sidebar.markdown("---")
-st.sidebar.write("💡 Tip: Paste your code and click *Run Review* to get insights.")
+# ---- Fixed UI definitions ----
+code_area = ui.textarea(
+    label='Paste your code here:',
+    placeholder='def example():\n    pass',
+    value='',
+).style('width: 100%; height: 400px')
 
-# Main content
-code = st.text_area("Paste your code here:", height=350, placeholder="def example_function():\n    pass")
+result_lint = ui.markdown("").classes('text-sm text-gray-500')
+result_ai = ui.markdown("").classes('text-sm text-gray-500')
+fixed_code_box = ui.textarea(
+    label='Auto-fixed code:',
+    value='',
+).style('width: 100%; height: 400px')
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    run_button = st.button("Run Review")
+# ---- Button handler ----
+def run_review():
+    code = code_area.value.strip()
+    if not code:
+        ui.notify("⚠️ Please paste some code first.", color='negative')
+        return
 
-# When button clicked
-if run_button:
-    if not code.strip():
-        st.warning("Please paste some code first.")
-    else:
-        st.info("Reviewing code... please wait.")
+    ui.notify("Reviewing code... please wait.", color='primary')
+    try:
+        res = requests.post(BACKEND_URL, data={"code": code})
+        data = res.json()
 
-        # Mocked AI review output for demo mode
-        if llm_mode == "Demo":
-            demo_response = {
-                "lint_issues": [
-                    {"line": 2, "type": "style", "message": "Function name should be lowercase (PEP8)."},
-                    {"line": 3, "type": "logic", "message": "Function does not return any value."},
-                ],
-                "ai_feedback": [
-                    {
-                        "issue_type": "optimization",
-                        "description": "Consider using list comprehension for better readability.",
-                        "line_number": 5,
-                        "suggested_fix": "Replace the for loop with a list comprehension."
-                    }
-                ]
-            }
-            response = demo_response
-        elif llm_mode == "Local LLM":
-            try:
-                payload = {"prompt": f"Review this code:\n{code}"}
-                r = requests.post(api_url, json=payload)
-                response = r.json()
-            except Exception as e:
-                st.error(f"Error connecting to local backend: {e}")
-                response = {}
+        if data.get("lint_issues"):
+            lint_md = "### 🧾 Lint Issues\n" + "\n".join([f"- {x}" for x in data["lint_issues"]])
         else:
-            st.error("Remote API mode not yet implemented.")
-            response = {}
+            lint_md = "✅ No lint issues detected"
+        result_lint.set_content(lint_md)
 
-        # Display results
-        if response:
-            st.subheader("🧾 Lint & Static Analysis")
-            if "lint_issues" in response and response["lint_issues"]:
-                for issue in response["lint_issues"]:
-                    st.markdown(f"🔹 **Line {issue['line']}** — *{issue['type']}*: {issue['message']}")
-            else:
-                st.success("No linting issues detected ✅")
+        feedbacks = data.get("ai_feedback", [])
+        if feedbacks:
+            ai_md = "### 💬 AI Suggestions\n"
+            for fb in feedbacks:
+                ai_md += f"**{fb.get('issue_type', 'general').title()}** (line {fb.get('line_number', '-')})\n\n"
+                ai_md += f"{fb.get('description', '')}\n\n"
+                if fb.get("suggested_fix"):
+                    ai_md += f"```python\n{fb['suggested_fix']}\n```\n"
+        else:
+            ai_md = "✅ No AI feedback detected"
+        result_ai.set_content(ai_md)
 
-            st.subheader("💬 AI Suggestions")
-            if "ai_feedback" in response and response["ai_feedback"]:
-                for fb in response["ai_feedback"]:
-                    st.markdown(f"""
-                    **Issue Type:** {fb['issue_type']}  
-                    **Line:** {fb['line_number']}  
-                    **Description:** {fb['description']}  
-                    **Suggested Fix:**  
-                    ```python
-                    {fb['suggested_fix']}
-                    ```
-                    """)
-            else:
-                st.success("No AI feedback generated ✅")
+        fixed_code_box.value = data.get("fixed_code", "")
+        ui.notify("✅ Review completed!", color='positive')
+
+    except Exception as e:
+        ui.notify(f"Error: {e}", color='negative')
+
+ui.button("🚀 Run Review", on_click=run_review, color='primary').classes('mt-4')
+ui.separator()
+ui.label("Developed for Hackathon 2025 — AI-Powered Code Review Assistant").classes('text-xs text-gray-400 mt-6')
+
+ui.run(title='AI Code Review Assistant', port=8502)
