@@ -1,93 +1,105 @@
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
 import tempfile
+import subprocess
+import re
 
-app = FastAPI(title="AI Code Review Backend")
+app = FastAPI(title="AI Code Review Backend with Auto-Fix")
 
-# Allow Streamlit frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or ["http://localhost:8501"] for stricter setup
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Ollama Settings ---
+# --- Ollama settings ---
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "codellama"  # Make sure you have pulled this model: `ollama pull codellama`
+MODEL_NAME = "codellama"  # make sure to pull: ollama pull codellama
 
 
-# ---------- Helper Functions ----------
+# ---------- Helper functions ----------
 
 def call_ollama(prompt: str):
-    """
-    Sends a text prompt to the local Ollama model and returns its response text.
-    """
+    """Send prompt to local LLM via Ollama."""
     payload = {"model": MODEL_NAME, "prompt": prompt, "stream": False}
     try:
         r = requests.post(OLLAMA_URL, json=payload, timeout=120)
         r.raise_for_status()
-        data = r.json()
-        # Ollama returns {"response": "..."} when stream=False
-        return data.get("response", "").strip()
+        return r.json().get("response", "").strip()
     except Exception as e:
         return f"[Error contacting LLM: {e}]"
 
 
 def run_lint_check(code: str):
-    """
-    Optionally runs pylint and extracts key messages.
-    """
+    """Run pylint and return main issues."""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode="w") as tmp:
             tmp.write(code)
             tmp_path = tmp.name
-
-        import subprocess
         result = subprocess.run(["pylint", tmp_path, "-rn", "--score", "n"],
                                 capture_output=True, text=True)
-        output = result.stdout
         issues = []
-        for line in output.splitlines():
-            if ":" in line and ("error" in line or "warning" in line):
+        for line in result.stdout.splitlines():
+            if re.search(r":\d+:", line):
                 issues.append(line.strip())
-        return issues[:5]  # limit to first 5
+        return issues[:5]
     except Exception:
         return []
+
+
+def apply_fixes_to_code(code: str, feedback: list):
+    """Try to apply suggested fixes based on LLM JSON feedback."""
+    lines = code.splitlines()
+    for fb in feedback:
+        try:
+            line_num = int(fb.get("line_number", -1))
+            fix = fb.get("suggested_fix", "")
+            if 1 <= line_num <= len(lines) and fix:
+                # Replace the line or append modification as comment
+                lines[line_num - 1] += f"  # FIX: {fix}"
+        except Exception:
+            continue
+    return "\n".join(lines)
 
 
 # ---------- Routes ----------
 
 @app.post("/review")
 async def review_code(code: str = Form(...)):
-    """
-    Receives source code, performs static + AI review, and returns analysis.
-    """
-    # 1. Static Analysis
+    """Perform code review and automatic fix."""
+    # --- 1. Static Linting ---
     lint_issues = run_lint_check(code)
 
-    # 2. AI Review
-    system_prompt = """You are an expert software reviewer.
-Analyze the following code for potential issues, best practices, and improvements.
-Return your response in JSON format with a list of findings:
+    # --- 2. AI Review (JSON output) ---
+    system_prompt = """You are a code review expert.
+Analyze the following Python code and produce a JSON list of findings.
+Each finding must follow this format:
 [
   {
     "issue_type": "bug/style/optimization/security",
-    "description": "what is wrong",
-    "line_number": 10,
-    "suggested_fix": "how to fix it"
+    "description": "short explanation",
+    "line_number": 12,
+    "suggested_fix": "short fix or replacement line"
   }
 ]
+Provide ONLY valid JSON as output.
 """
-    ai_feedback_raw = call_ollama(system_prompt + "\n\nCode:\n" + code)
+    ai_response = call_ollama(system_prompt + "\n\nCode:\n" + code)
 
-    # Attempt to parse model response if it returns JSON
     try:
-        ai_feedback = json.loads(ai_feedback_raw)
+        feedback = json.loads(ai_response)
     except Exception:
-        ai_feedback = [{"issue_type": "general", "description": ai_feedback_raw, "line_number": "-", "suggested_fix": ""}]
+        feedback = [{"issue_type": "general", "description": ai_response, "line_number": "-", "suggested_fix": ""}]
 
-    return {"lint_issues": lint_issues, "ai_feedback": ai_feedback}
+    # --- 3. Apply automatic fixes ---
+    fixed_code = apply_fixes_to_code(code, feedback)
+
+    return {
+        "lint_issues": lint_issues,
+        "ai_feedback": feedback,
+        "fixed_code": fixed_code
+    }

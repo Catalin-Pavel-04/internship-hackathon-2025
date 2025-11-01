@@ -4,7 +4,7 @@ import json
 
 st.set_page_config(page_title="AI Code Review Assistant", page_icon="🤖", layout="wide")
 
-st.title("🤖 AI-Powered Code Review Assistant")
+st.title("AI-Powered Code Review Assistant")
 st.write("Analyze your code, detect issues, and get AI-driven recommendations instantly.")
 
 # Sidebar
@@ -20,7 +20,7 @@ code = st.text_area("Paste your code here:", height=350, placeholder="def exampl
 
 col1, col2 = st.columns([1, 3])
 with col1:
-    run_button = st.button("🚀 Run Review")
+    run_button = st.button("Run Review")
 
 # When button clicked
 if run_button:
